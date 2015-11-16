@@ -223,6 +223,16 @@ MASTER SERVER FUNCTIONS
 ==============================================================================
 */
 
+#define NEW_RESOLVE_DURATION	86400000 // 24 hours
+static int g_lastResolveTime[MAX_MASTER_SERVERS];
+
+static inline int SV_MasterNeedsResolving(int server, int time)
+{
+	// refresh every so often regardless of if the actual address was modified -rww
+	return g_lastResolveTime[server] > time ||
+		(time - g_lastResolveTime[server]) > NEW_RESOLVE_DURATION;
+}
+
 /*
 ================
 SV_MasterHeartbeat
@@ -238,9 +248,10 @@ but not on every player enter or exit.
 void SV_MasterHeartbeat(const char *message)
 {
 	static netadr_t	adr[MAX_MASTER_SERVERS][2]; // [2] for v4 and v6 address for the same address string.
-	int			i;
-	int			res;
-	int			netenabled;
+	int		i;
+	int		res;
+	int		netenabled;
+	int		time;
 
 	netenabled = Cvar_VariableIntegerValue("net_enabled");
 
@@ -257,6 +268,10 @@ void SV_MasterHeartbeat(const char *message)
 
 	svs.nextHeartbeatTime = svs.time + HEARTBEAT_MSEC;
 
+	// we need to use this instead of svs.time since svs.time resets over map changes (or rather
+	// every time the game restarts), and we don't really need to resolve every map change
+	time = Com_Milliseconds();
+
 	// send to group masters
 	for (i = 0; i < MAX_MASTER_SERVERS; i++)
 	{
@@ -266,10 +281,12 @@ void SV_MasterHeartbeat(const char *message)
 		// see if we haven't already resolved the name
 		// resolving usually causes hitches on win95, so only
 		// do it when needed
-		if(sv_master[i]->modified || (adr[i][0].type == NA_BAD && adr[i][1].type == NA_BAD))
+		if(sv_master[i]->modified || (adr[i][0].type == NA_BAD && adr[i][1].type == NA_BAD) ||
+				SV_MasterNeedsResolving(i, time))
 		{
 			sv_master[i]->modified = qfalse;
-			
+			g_lastResolveTime[i] = time;
+
 			if(netenabled & NET_ENABLEV4)
 			{
 				Com_Printf("Resolving %s (IPv4)\n", sv_master[i]->string);
@@ -280,13 +297,13 @@ void SV_MasterHeartbeat(const char *message)
 					// if no port was specified, use the default master port
 					adr[i][0].port = BigShort(PORT_MASTER);
 				}
-				
+
 				if(res)
 					Com_Printf( "%s resolved to %s\n", sv_master[i]->string, NET_AdrToStringwPort(adr[i][0]));
 				else
 					Com_Printf( "%s has no IPv4 address.\n", sv_master[i]->string);
 			}
-			
+
 			if(netenabled & NET_ENABLEV6)
 			{
 				Com_Printf("Resolving %s (IPv6)\n", sv_master[i]->string);
@@ -297,7 +314,7 @@ void SV_MasterHeartbeat(const char *message)
 					// if no port was specified, use the default master port
 					adr[i][1].port = BigShort(PORT_MASTER);
 				}
-				
+
 				if(res)
 					Com_Printf( "%s resolved to %s\n", sv_master[i]->string, NET_AdrToStringwPort(adr[i][1]));
 				else
